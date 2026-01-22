@@ -17,35 +17,11 @@
 #include "esp_bridge.h"
 #include "esp_mesh_lite.h"
 
-static const char *TAG = "mesh_basic";
+/* Node-specific modules */
+#include "root_node/root_node.h"
+#include "leaf_node/leaf_node.h"
 
-/**
- * @brief Timed printing system information
- */
-static void print_system_info_timercb(TimerHandle_t timer)
-{
-    uint8_t primary                 = 0;
-    uint8_t sta_mac[6]              = {0};
-    wifi_ap_record_t ap_info        = {0};
-    wifi_second_chan_t second       = 0;
-    wifi_sta_list_t wifi_sta_list   = {0x0};
-
-    esp_wifi_sta_get_ap_info(&ap_info);
-    esp_wifi_get_mac(ESP_IF_WIFI_STA, sta_mac);
-    esp_wifi_ap_get_sta_list(&wifi_sta_list);
-    esp_wifi_get_channel(&primary, &second);
-
-    ESP_LOGI(TAG, "System information, channel: %d, layer: %d, self mac: " MACSTR ", parent bssid: " MACSTR
-             ", parent rssi: %d, free heap: %"PRIu32"", primary,
-             esp_mesh_lite_get_level(), MAC2STR(sta_mac), MAC2STR(ap_info.bssid),
-             (ap_info.rssi != 0 ? ap_info.rssi : -120), esp_get_free_heap_size());
-#if CONFIG_MESH_LITE_NODE_INFO_REPORT
-    ESP_LOGI(TAG, "All node number: %"PRIu32"", esp_mesh_lite_get_mesh_node_number());
-#endif /* MESH_LITE_NODE_INFO_REPORT */
-    for (int i = 0; i < wifi_sta_list.num; i++) {
-        ESP_LOGI(TAG, "Child mac: " MACSTR, MAC2STR(wifi_sta_list.sta[i].mac));
-    }
-}
+static const char *TAG = "mesh_main";
 
 static esp_err_t esp_storage_init(void)
 {
@@ -133,16 +109,41 @@ void app_main()
     esp_mesh_lite_config_t mesh_lite_config = ESP_MESH_LITE_DEFAULT_INIT();
     esp_mesh_lite_init(&mesh_lite_config);
 
+    // Configure node role based on Kconfig
+#if CONFIG_MESH_ROOT
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  NODE TYPE: ROOT");
+    ESP_LOGI(TAG, "  - Will connect to router");
+    ESP_LOGI(TAG, "  - Maintains mesh network 24/7");
+    ESP_LOGI(TAG, "  - NEVER enters deep sleep");
+    ESP_LOGI(TAG, "========================================");
+    esp_mesh_lite_set_allowed_level(1);
+    
+    /* Initialize root node module */
+    ESP_ERROR_CHECK(root_node_init());
+#else
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  NODE TYPE: LEAF");
+    ESP_LOGI(TAG, "  - Connects to mesh via root/parent");
+    ESP_LOGI(TAG, "  - Uses ULP for low-power PIR monitoring");
+    ESP_LOGI(TAG, "  - Enters deep sleep when idle");
+    ESP_LOGI(TAG, "========================================");
+    esp_mesh_lite_set_disallowed_level(1);
+    
+    /* Initialize leaf node module (sets up ULP) */
+    ESP_ERROR_CHECK(leaf_node_init());
+#endif
+
     app_wifi_set_softap_info();
 
     esp_mesh_lite_start();
 
     ESP_LOGI(TAG, "Mesh network started successfully");
 
-    /**
-     * @brief Create timer to print system info every 10 seconds
-     */
-    TimerHandle_t timer = xTimerCreate("print_system_info", 10000 / portTICK_PERIOD_MS,
-                                       true, NULL, print_system_info_timercb);
-    xTimerStart(timer, 0);
+    /* Start node-specific operation */
+#if CONFIG_MESH_ROOT
+    root_node_start();
+#else
+    leaf_node_start();
+#endif
 }

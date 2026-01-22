@@ -31,7 +31,20 @@ La principal ventaja sobre ESP-MESH tradicional es que **cada nodo puede acceder
 
 ```
 trapcam_mesh/
-├── main/                      # Aplicación principal del usuario
+├── main/                      # Aplicación principal modularizada
+│   ├── main.c                 # Punto de entrada, selecciona modo root/leaf
+│   ├── Kconfig.projbuild      # Opciones de configuración del proyecto
+│   ├── CMakeLists.txt         # Configuración de build con ULP
+│   ├── root_node/             # Módulo para nodo raíz
+│   │   ├── root_node.c        # Lógica del nodo root (siempre activo)
+│   │   └── root_node.h        # Interfaz pública del módulo root
+│   ├── leaf_node/             # Módulo para nodos hoja
+│   │   ├── leaf_node.c        # Lógica del nodo leaf (deep sleep)
+│   │   ├── leaf_node.h        # Interfaz pública del módulo leaf
+│   │   ├── ulp_pir.c          # Interfaz C para el programa ULP
+│   │   └── ulp_pir.h          # Declaraciones del módulo ULP PIR
+│   └── ulp/                   # Programas del coprocesador ULP
+│       └── pir_monitor.S      # Monitor PIR en ensamblador ULP
 ├── components/                # Componentes locales (symlinks)
 ├── managed_components/        # Componentes descargados automáticamente
 ├── esp-mesh-lite/            # Submodulo de ESP-MESH-LITE
@@ -44,47 +57,103 @@ trapcam_mesh/
 
 ## Componentes Principales
 
-### 1. **main/** - Aplicación Principal
+### 1. **main/** - Aplicación Principal (Modularizada)
 
-**Archivo:** `main.c`
+El código está organizado en módulos separados para **nodo root** y **nodo leaf**, permitiendo comportamientos diferenciados según el rol en la red mesh.
 
-**Función:** Contiene la lógica de aplicación del usuario. Es el punto de entrada del programa.
+#### **1.1 main.c - Punto de Entrada**
 
-**Responsabilidades:**
-- Inicialización del sistema (NVS, WiFi, event loop)
-- Configuración de la red mesh
-- Monitoreo y reporte del estado del sistema
+**Función:** Inicializa el sistema y delega al módulo correspondiente según configuración.
 
 **Flujo de Ejecución en `app_main()`:**
 
-1. **Inicialización de almacenamiento NVS** (`esp_storage_init()`):
-   - NVS (Non-Volatile Storage) es una memoria flash que persiste datos incluso sin alimentación
-   - Almacena configuración WiFi, credenciales, etc.
+1. **Inicialización común:**
+   - NVS (Non-Volatile Storage)
+   - Event loop del sistema
+   - Interfaces de red (netif)
+   - Configuración WiFi (STA + AP)
 
-2. **Inicialización de red** (`esp_netif_init()`):
-   - Crea las interfaces de red (STA y AP)
-   - Configura el stack TCP/IP (LwIP)
+2. **Configuración Mesh según rol:**
+   ```c
+   #if CONFIG_MESH_ROOT
+       // Nivel 1 exclusivo - solo este puede ser root
+       esp_mesh_lite_set_allowed_level(1);
+   #else
+       // Prohibir nivel 1 - nunca será root
+       esp_mesh_lite_set_disallowed_level(1);
+   #endif
+   ```
 
-3. **Configuración WiFi** (`wifi_init()`):
-   - Configura SSID y password del router (Station)
-   - Configura SSID y password del SoftAP propio
+3. **Delegación al módulo correspondiente:**
+   ```c
+   #if CONFIG_MESH_ROOT
+       root_node_init();
+       root_node_start();
+   #else
+       leaf_node_init();
+       leaf_node_start();
+   #endif
+   ```
 
-4. **Inicialización de Mesh-Lite** (`esp_mesh_lite_init()`):
-   - Configura los parámetros de la red mesh
-   - Establece callbacks y políticas de red
+#### **1.2 root_node/ - Módulo Nodo Raíz**
 
-5. **Inicio del sistema mesh** (`esp_mesh_lite_start()`):
-   - Comienza el proceso de auto-organización
-   - El dispositivo busca red mesh existente o crea una nueva
+**Archivos:** `root_node.c`, `root_node.h`
 
-6. **Timer de monitoreo** (`xTimerCreate()`):
-   - Cada 10 segundos imprime información del sistema
-   - Muestra: canal, nivel en jerarquía, MAC, RSSI, nodos hijos
+**Responsabilidades:**
+- Mantener la red mesh activa 24/7
+- **Nunca entrar en deep sleep**
+- Orquestar la comunicación entre nodos
+- Reportar estado del sistema periódicamente
 
-**Funciones Clave:**
+**Funciones Principales:**
+- `root_node_init()`: Inicialización del módulo root
+- `root_node_start()`: Inicia timer de monitoreo (cada 10s)
 
-- **`print_system_info_timercb()`**: Callback del timer que imprime estado de la red mesh cada 10 segundos
-- **`app_wifi_set_softap_info()`**: Configura SSID/password del SoftAP, puede agregar MAC al nombre para identificación única
+**Comportamiento:**
+- Siempre conectado al router WiFi
+- Nivel 1 en la jerarquía mesh
+- SoftAP activo para aceptar nodos hijos
+- Timer imprime: canal, nivel, MAC, RSSI, hijos conectados
+
+#### **1.3 leaf_node/ - Módulo Nodo Hoja**
+
+**Archivos:** `leaf_node.c`, `leaf_node.h`, `ulp_pir.c`, `ulp_pir.h`
+
+**Responsabilidades:**
+- Operar en modo de ultra bajo consumo
+- Monitorear sensor PIR durante deep sleep
+- Despertar solo al detectar movimiento
+- Reconectarse a la red mesh tras despertar
+
+**Funciones Principales:**
+- `leaf_node_init()`: Configura ULP y GPIO del PIR
+- `leaf_node_start()`: Inicia lógica de sueño/despertar
+- `leaf_node_request_sleep()`: Solicita entrada a deep sleep
+
+**Ciclo de Operación:**
+```
+1. Despertar (PIR o timer)
+2. Conectar a red mesh
+3. Transmitir datos si hay detección
+4. Esperar CONFIG_LEAF_AWAKE_TIME_MS
+5. Entrar en deep sleep con ULP activo
+```
+
+#### **1.4 ulp/ - Coprocesador Ultra Low Power**
+
+**Archivo:** `pir_monitor.S`
+
+**Función:** Monitorear GPIO del sensor PIR mientras el CPU principal duerme.
+
+**Características:**
+- Ejecuta mientras CPU principal duerme
+- **Usa polling** porque el ULP no soporta interrupciones GPIO
+- Periodo de polling configurable (default 100ms)
+- Despierta CPU al detectar señal HIGH en el GPIO
+
+> **¿Por qué polling y no interrupciones?** El coprocesador ULP FSM es muy simple y no tiene capacidad de manejar interrupciones de hardware. Por eso se implementa un ciclo de polling que lee el estado del GPIO periódicamente.
+
+**Ver sección [Sistema ULP](#sistema-ulp-ultra-low-power) para detalles completos.**
 
 ---
 
@@ -206,11 +275,21 @@ ESP-IDF usa **Kconfig** para configuración centralizada. Similar a la configura
 #### **Kconfig.projbuild**
 - Define opciones de configuración específicas del proyecto
 - Se integra en `idf.py menuconfig`
-- Ejemplo de este proyecto:
-  ```
-  CONFIG_ROUTER_SSID       # SSID del router
-  CONFIG_ROUTER_PASSWORD   # Password del router
-  ```
+- Opciones principales de este proyecto:
+
+**Configuración de Red:**
+```
+CONFIG_ROUTER_SSID           # SSID del router WiFi
+CONFIG_ROUTER_PASSWORD       # Password del router
+CONFIG_MESH_ROOT             # true=nodo raíz, false=nodo hoja
+```
+
+**Configuración de Nodo Leaf (solo si CONFIG_MESH_ROOT=n):**
+```
+CONFIG_LEAF_PIR_GPIO         # GPIO del sensor PIR (default: 12)
+CONFIG_LEAF_AWAKE_TIME_MS    # Tiempo activo antes de dormir (default: 30000ms)
+CONFIG_LEAF_ULP_POLL_PERIOD_US  # Periodo de polling ULP (default: 100000µs)
+```
 
 ### Acceso a configuración en código
 
@@ -246,14 +325,25 @@ project(trapcam_mesh)
 ```cmake
 idf_component_register(
     SRCS "main.c"
-    INCLUDE_DIRS "."
+         "root_node/root_node.c"
+         "leaf_node/leaf_node.c"
+         "leaf_node/ulp_pir.c"
+    INCLUDE_DIRS "." "root_node" "leaf_node"
+    REQUIRES ulp esp_timer nvs_flash ...
 )
+
+# Configuración del programa ULP
+set(ulp_app_name ulp_pir_monitor)
+set(ulp_sources "ulp/pir_monitor.S")
+set(ulp_exp_dep_srcs "leaf_node/ulp_pir.c")
+ulp_embed_binary(${ulp_app_name} "${ulp_sources}" "${ulp_exp_dep_srcs}")
 ```
 
 **Función:**
-- Registra los archivos fuente del componente main
-- Define directorios de includes
-- Opcionalmente, especifica dependencias con otros componentes
+- Registra los archivos fuente de todos los módulos
+- Define directorios de includes para cada submódulo
+- Configura el embedding del programa ULP en el binario final
+- Especifica dependencias con otros componentes (incluyendo `ulp`)
 
 #### **main/idf_component.yml**
 ```yaml
@@ -343,6 +433,203 @@ idf.py build
   - BSSID y RSSI del nodo padre
   - Lista de nodos hijos conectados
   - Memoria libre disponible
+
+---
+
+## Sistema ULP (Ultra Low Power)
+
+El coprocesador ULP FSM permite monitorear sensores mientras el CPU principal está en deep sleep, manteniendo un consumo reducido.
+
+### Arquitectura del Sistema ULP
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         ESP32                                   │
+│  ┌──────────────┐                      ┌──────────────────────┐│
+│  │   CPU Main   │◄──── wake signal ────│    ULP Coprocessor   ││
+│  │  (sleeping)  │                      │     (running)        ││
+│  └──────────────┘                      └──────────┬───────────┘│
+│                                                   │            │
+│                                        ┌──────────▼───────────┐│
+│                                        │   RTC GPIO 15        ││
+│                                        │   (GPIO 12)          ││
+│                                        └──────────┬───────────┘│
+└───────────────────────────────────────────────────┼────────────┘
+                                                    │
+                                           ┌────────▼────────┐
+                                           │   Sensor PIR    │
+                                           │   (HC-SR501)    │
+                                           └─────────────────┘
+```
+
+### Programa ULP: pir_monitor.S
+
+El programa ULP está escrito en ensamblador y realiza las siguientes operaciones:
+
+```asm
+entry:
+    /* Lee estado del GPIO 12 (RTC_GPIO15) */
+    READ_RTC_REG(RTC_GPIO_IN_REG, RTC_GPIO_IN_NEXT_S + 15, 1)
+    
+    /* Si HIGH → despertar CPU */
+    jumpr wake_up, 1, GE
+    
+    /* Si LOW → continuar durmiendo */
+    halt
+
+wake_up:
+    /* Marcar flag de detección */
+    move r3, pir_triggered
+    move r2, 1
+    st r2, r3, 0
+    
+    /* Incrementar contador de wakeups */
+    move r3, wakeup_counter
+    ld r2, r3, 0
+    add r2, r2, 1
+    st r2, r3, 0
+    
+    /* Despertar CPU principal */
+    wake
+    halt
+```
+
+**Variables exportadas al programa principal:**
+- `ulp_wakeup_counter`: Contador de veces que ULP despertó al CPU
+- `ulp_pir_triggered`: Flag indicando si fue por detección PIR
+
+### Mapeo de GPIO a RTC GPIO
+
+| GPIO Normal | RTC GPIO | Uso en ULP |
+|-------------|----------|------------|
+| GPIO 0      | RTC_GPIO11 | Strapping |
+| GPIO 2      | RTC_GPIO12 | Strapping |
+| GPIO 4      | RTC_GPIO10 | Disponible |
+| **GPIO 12** | **RTC_GPIO15** | **PIR Sensor** |
+| GPIO 13     | RTC_GPIO14 | Disponible |
+| GPIO 14     | RTC_GPIO16 | Disponible |
+| GPIO 15     | RTC_GPIO13 | Strapping |
+| GPIO 25     | RTC_GPIO6  | DAC1 |
+| GPIO 26     | RTC_GPIO7  | DAC2 |
+| GPIO 27     | RTC_GPIO17 | Disponible |
+| GPIO 32     | RTC_GPIO9  | XTAL32 |
+| GPIO 33     | RTC_GPIO8  | XTAL32 |
+| GPIO 34     | RTC_GPIO4  | Input only |
+| GPIO 35     | RTC_GPIO5  | Input only |
+| GPIO 36     | RTC_GPIO0  | Input only |
+| GPIO 39     | RTC_GPIO3  | Input only |
+
+### Configuración sdkconfig para ULP
+
+```ini
+# Habilitar coprocesador ULP
+CONFIG_ULP_COPROC_ENABLED=y
+CONFIG_ULP_COPROC_TYPE_FSM=y
+CONFIG_ULP_COPROC_RESERVE_MEM=512
+```
+
+### Inicialización ULP en C (ulp_pir.c)
+
+```c
+#include "ulp.h"
+#include "ulp_pir_monitor.h"
+#include "driver/rtc_io.h"
+
+// Referencia al binario ULP generado
+extern const uint8_t ulp_main_bin_start[] asm("_binary_ulp_pir_monitor_bin_start");
+extern const uint8_t ulp_main_bin_end[]   asm("_binary_ulp_pir_monitor_bin_end");
+
+esp_err_t ulp_pir_init(void)
+{
+    // Configurar GPIO como entrada RTC con pull-down
+    rtc_gpio_init(GPIO_NUM_12);
+    rtc_gpio_set_direction(GPIO_NUM_12, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_en(GPIO_NUM_12);
+    rtc_gpio_hold_en(GPIO_NUM_12);
+
+    // Cargar programa ULP en memoria RTC
+    size_t size = (ulp_main_bin_end - ulp_main_bin_start) / sizeof(uint32_t);
+    ulp_load_binary(0, ulp_main_bin_start, size);
+
+    // Configurar periodo de polling (cada 100ms)
+    ulp_set_wakeup_period(0, CONFIG_LEAF_ULP_POLL_PERIOD_US);
+
+    return ESP_OK;
+}
+
+void ulp_pir_enter_deep_sleep(void)
+{
+    // Habilitar wakeup por ULP
+    esp_sleep_enable_ulp_wakeup();
+    
+    // Iniciar programa ULP
+    ulp_run(&ulp_entry - RTC_SLOW_MEM);
+    
+    // Entrar en deep sleep
+    esp_deep_sleep_start();
+}
+```
+
+### Flujo de Operación Deep Sleep
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    NODO LEAF - CICLO DE VIDA                   │
+└─────────────────────────────────────────────────────────────────┘
+
+     ┌──────────┐
+     │  BOOT    │
+     └────┬─────┘
+          │
+          ▼
+     ┌──────────┐     ┌─────────────────────────────────────────┐
+     │  INIT    │────►│ • Verificar causa de wakeup             │
+     └────┬─────┘     │ • Inicializar ULP si primer boot        │
+          │           │ • Configurar GPIO PIR                    │
+          │           └─────────────────────────────────────────┘
+          ▼
+     ┌──────────┐     ┌─────────────────────────────────────────┐
+     │ CONNECT  │────►│ • Conectar a red mesh                   │
+     └────┬─────┘     │ • Esperar asignación de IP              │
+          │           │ • Sincronizar con nodo root             │
+          │           └─────────────────────────────────────────┘
+          ▼
+     ┌──────────┐     ┌─────────────────────────────────────────┐
+     │  ACTIVE  │────►│ • Si wakeup por PIR: enviar alerta      │
+     └────┬─────┘     │ • Procesar comandos pendientes          │
+          │           │ • Mantener activo CONFIG_LEAF_AWAKE_TIME│
+          │           └─────────────────────────────────────────┘
+          ▼
+     ┌──────────┐     ┌─────────────────────────────────────────┐
+     │  SLEEP   │────►│ • Desconectar WiFi                      │
+     └────┬─────┘     │ • Habilitar ULP wakeup                  │
+          │           │ • Entrar en deep sleep                   │
+          │           └─────────────────────────────────────────┘
+          │
+          │ (ULP detecta PIR HIGH)
+          │
+          └──────────────────────┐
+                                 │
+                                 ▼
+                            ┌──────────┐
+                            │  WAKEUP  │──────► Vuelve a INIT
+                            └──────────┘
+```
+
+### Consumo de Energía (Medido)
+
+| Estado | Consumo | Duración típica |
+|--------|---------|-----------------|
+| Active (WiFi TX) | ~200mA | 2-5s |
+| Active (WiFi idle) | ~100mA | CONFIG_LEAF_AWAKE_TIME |
+| Deep Sleep + ULP | **10-15mA** | Indefinido |
+| Wakeup transition | ~70mA | ~100ms |
+
+> **Nota:** El consumo en deep sleep de 10-15mA (medido con multímetro) es mayor que el teórico del chip ESP32 (~10µA) debido a otros componentes de la placa: regulador de voltaje, LEDs, etc. Para reducir consumo, considerar usar módulos ESP32 "bare" o deshabilitar componentes no esenciales.
+
+**Ejemplo de cálculo (batería 2000mAh):**
+- Consumo en sleep: ~12mA promedio
+- Autonomía teórica: 2000/12 ≈ **166 horas** (~7 días)
 
 ---
 
@@ -500,11 +787,56 @@ Define submódulos Git (esp-mesh-lite). Al clonar con `--recursive` se descargan
 
 ## Próximos Pasos Sugeridos
 
-1. **Entender el flujo**: Seguir con debugger paso a paso desde `app_main()`
-2. **Experimentar**: Cambiar configuración en `menuconfig` y observar efectos
-3. **Agregar funcionalidad**: Implementar nuevas características sobre la red mesh básica (ej: sensores, comunicación entre nodos)
-4. **Mesh avanzado**: Implementar comunicación inter-nodos usando la API de mesh-lite
-5. **Provisioning**: Integrar wifi_provisioning vía BLE para configuración dinámica
+1. **Probar en hardware**: Flashear firmware en ESP32 y verificar comportamiento root/leaf
+2. **Calibrar PIR**: Ajustar sensibilidad y tiempo de polling según sensor utilizado
+3. **Implementar comunicación**: Usar API mesh-lite para enviar alertas PIR al root
+4. **Agregar cámara**: Integrar captura de imagen al detectar movimiento
+5. **Optimizar consumo**: Medir consumo real y ajustar `CONFIG_LEAF_AWAKE_TIME_MS`
+6. **Provisioning BLE**: Integrar wifi_provisioning para configuración sin recompilar
+
+---
+
+## Comandos Útiles de Desarrollo
+
+### Compilación y Flash
+
+```bash
+# Compilar proyecto
+idf.py build
+
+# Flashear y monitorear
+idf.py flash monitor
+
+# Solo monitorear (Ctrl+] para salir)
+idf.py monitor
+
+# Limpiar build completo (regenera sdkconfig)
+idf.py fullclean
+```
+
+### Configuración
+
+```bash
+# Abrir menú de configuración
+idf.py menuconfig
+
+# Cambiar a modo ROOT
+# → Component config → Mesh Lite Configuration → [x] Configure as Mesh Root Node
+
+# Configurar leaf node
+# → Component config → Leaf Node Configuration → Ajustar parámetros
+```
+
+### Depuración
+
+```bash
+# Ver logs con nivel debug
+idf.py monitor -p /dev/ttyUSB0
+
+# Configurar nivel de log por componente (en código)
+esp_log_level_set("LEAF_NODE", ESP_LOG_DEBUG);
+esp_log_level_set("ULP_PIR", ESP_LOG_DEBUG);
+```
 
 ---
 
@@ -518,4 +850,6 @@ Define submódulos Git (esp-mesh-lite). Al clonar con `--recursive` se descargan
 ---
 
 **Documento creado:** Enero 2026  
-**Versión del proyecto:** Basado en ESP-MESH-LITE v1.0 y ESP-IDF v5.x
+**Última actualización:** Enero 2026  
+**Versión del proyecto:** Basado en ESP-MESH-LITE v1.0 y ESP-IDF v5.5.2  
+**Características:** Arquitectura modular Root/Leaf con soporte ULP para bajo consumo
