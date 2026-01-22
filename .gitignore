@@ -1,0 +1,14 @@
+# Build
+build/
+managed_components/
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Configuración local
+sdkconfig
+sdkconfig.old
+
+# No ignorar los symlinks en components/
+# Git los guarda como symlinks automáticamente

@@ -1,0 +1,4 @@
+[submodule "esp-mesh-lite"]
+	path = esp-mesh-lite
+	url = https://github.com/GabyDs/esp-mesh-lite
+	branch = release/v1.0
