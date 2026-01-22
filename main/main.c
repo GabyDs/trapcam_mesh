@@ -132,19 +132,6 @@ void app_main()
 
     esp_mesh_lite_config_t mesh_lite_config = ESP_MESH_LITE_DEFAULT_INIT();
     esp_mesh_lite_init(&mesh_lite_config);
-ESP_LOGI(TAG, "Initializing basic mesh network...");
-
-    esp_storage_init();
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    esp_bridge_create_all_netif();
-
-    wifi_init();
-
-    esp_mesh_lite_config_t mesh_lite_config = ESP_MESH_LITE_DEFAULT_INIT();
-    esp_mesh_lite_init(&mesh_lite_config);
 
     app_wifi_set_softap_info();
 
@@ -155,3 +142,7 @@ ESP_LOGI(TAG, "Initializing basic mesh network...");
     /**
      * @brief Create timer to print system info every 10 seconds
      */
+    TimerHandle_t timer = xTimerCreate("print_system_info", 10000 / portTICK_PERIOD_MS,
+                                       true, NULL, print_system_info_timercb);
+    xTimerStart(timer, 0);
+}

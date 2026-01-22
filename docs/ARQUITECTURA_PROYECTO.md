@@ -46,7 +46,7 @@ trapcam_mesh/
 
 ### 1. **main/** - Aplicación Principal
 
-**Archivo:** `local_control.c`
+**Archivo:** `main.c`
 
 **Función:** Contiene la lógica de aplicación del usuario. Es el punto de entrada del programa.
 
@@ -158,7 +158,7 @@ Estos componentes son descargados automáticamente por el **IDF Component Manage
 
 **Estructura:**
 - `components/`: Código de los componentes mesh_lite y wifi_provisioning
-- `examples/`: Ejemplos de uso (este proyecto está basado en `mesh_local_control`)
+- `examples/`: Ejemplos de uso (este proyecto está basado en el ejemplo `mesh_local_control`)
 - `docs/`: Documentación detallada
 
 **Por qué submódulo:** Permite actualizar a nuevas versiones de mesh-lite sin copiar archivos manualmente.
@@ -171,8 +171,8 @@ Generado por CMake/Ninja al ejecutar `idf.py build`. Contiene:
 
 - **bootloader/**: Bootloader compilado (primera etapa de arranque)
 - **partition_table**: Tabla de particiones (ubicación de app, nvs, etc.)
-- **mesh_local_control.elf**: Ejecutable con símbolos de debug
-- **mesh_local_control.bin**: Binario final para flashear
+- **trapcam_mesh.elf**: Ejecutable con símbolos de debug
+- **trapcam_mesh.bin**: Binario final para flashear
 - **compile_commands.json**: Usado por IDEs para autocompletado y análisis
 - **sdkconfig.h**: Configuración en formato C header
 - **flash_args**: Argumentos para herramienta de flasheo
@@ -234,7 +234,7 @@ ESP-IDF usa CMake como sistema de build, que genera archivos para Ninja (herrami
 ```cmake
 cmake_minimum_required(VERSION 3.5)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(mesh_local_control)
+project(trapcam_mesh)
 ```
 
 **Función:**
@@ -245,7 +245,7 @@ project(mesh_local_control)
 #### **main/CMakeLists.txt**
 ```cmake
 idf_component_register(
-    SRCS "local_control.c"
+    SRCS "main.c"
     INCLUDE_DIRS "."
 )
 ```
@@ -301,7 +301,7 @@ idf.py build
    - Habilita seguridad (opcional)
    - Carga app en RAM y ejecuta
 
-3. **App** (`mesh_local_control.bin`):
+3. **App** (`trapcam_mesh.bin`):
    - Inicializa heap, stacks
    - Inicia FreeRTOS scheduler
    - Llama a `app_main()`
