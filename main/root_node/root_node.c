@@ -40,6 +40,19 @@ esp_err_t root_node_init(void)
     ESP_LOGI(TAG, "This node will NEVER enter deep sleep");
     ESP_LOGI(TAG, "It maintains the mesh network 24/7");
 
+    /*
+     * Configure SoftAP inactive time to 60 seconds.
+     * This is how long the root node waits before removing
+     * a disconnected leaf node from its routing table.
+     * Default is ~300 seconds, but we want faster cleanup.
+     */
+    esp_err_t ret = esp_wifi_set_inactive_time(WIFI_IF_AP, 60);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "SoftAP inactive timeout set to 60 seconds");
+    } else {
+        ESP_LOGW(TAG, "Failed to set inactive time: %s", esp_err_to_name(ret));
+    }
+
     /* Create status timer to periodically print mesh info */
     s_status_timer = xTimerCreate(
         "root_status",
