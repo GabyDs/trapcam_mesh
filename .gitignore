@@ -10,5 +10,5 @@ managed_components/
 sdkconfig
 sdkconfig.old
 
-# No ignorar los symlinks en components/
-# Git los guarda como symlinks automáticamente
+# Symlinks generados por setup_components.sh
+components/

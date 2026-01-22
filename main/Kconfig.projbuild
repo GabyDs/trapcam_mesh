@@ -1,27 +1,16 @@
-menu "Example Configuration"
+menu "Mesh Configuration"
 
 config ROUTER_SSID
     string "Router SSID"
         default "ROUTER_SSID"
         help
-            Router SSID.
+            SSID of the WiFi router to connect to.
+            This router provides internet access to the root node.
 
 config ROUTER_PASSWORD
     string "Router password"
         default "ROUTER_PASSWORD"
         help
-            Router password.
-
-config SERVER_IP
-    string "Server IP address"
-        default "192.168.0.1"
-        help
-            Server IP address.
-
-config SERVER_PORT
-    int "Server port"
-        default "8070"
-        help
-            Server port.
+            Password of the WiFi router.
 
 endmenu
